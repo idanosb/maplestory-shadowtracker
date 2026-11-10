@@ -330,6 +330,19 @@ def test_debug_dir_saves_crops_and_log(tmp_path):
     assert sum(n.endswith("_map.png") for n in names) == 1
     log = (tmp_path / "readings.log").read_text(encoding="utf-8")
     assert "115051" in log and "Kerning City Subway" in log
+    assert not any(n.endswith("_full.png") for n in names)  # EXP read: no full frame
+
+
+def test_debug_saves_full_frame_when_no_exp_bar(tmp_path):
+    clock = Clock()
+    r = FrameReader(debug_dir=tmp_path, clock=clock)
+    blank = np.full((1200, 1920, 3), 40, np.uint8)
+    r.read(blank)
+    clock.t += 2
+    r.read(blank)  # within 10 s: no second full frame
+    names = [p.name for p in tmp_path.iterdir()]
+    assert sum(n.endswith("_full_unlocated.png") for n in names) == 1
+    assert "EXP bar not found; frame 1920x1200" in (tmp_path / "readings.log").read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------------ settings

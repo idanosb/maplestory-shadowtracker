@@ -476,3 +476,23 @@ def test_hint_fits():
     from expstrip.frame_reader import hint_fits
     assert hint_fits("4?", 46) and hint_fits("?6", 46)
     assert not hint_fits("??", 46) and not hint_fits("5?", 46) and not hint_fits("4", 46)
+
+
+def test_unknown_level_digits_are_guessed_from_exp_font_then_learned(tmp_path):
+    # A fresh install whose tile templates lack the player's digits (a laptop at Lv 47 had only
+    # "4" bundled): the tiles read "??", the level is guessed from the EXP font after
+    # GUESS_CONFIRM_FRAMES frames, then the real tile glyphs are learned from it.
+    import shutil
+    from expstrip.frame_reader import GLYPH_CONFIRM_FRAMES, GUESS_CONFIRM_FRAMES
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    shutil.copy(fr_mod.templates_dir() / "level" / "5.png", bundled / "5.png")
+    learned = tmp_path / "learned"
+    r = FrameReader(level_templates=bundled, learned_dir=learned, clock=Clock())
+    frame = load("session_06")  # Lv 44
+    levels = [r.read(frame)[0] for _ in range(GUESS_CONFIRM_FRAMES + GLYPH_CONFIRM_FRAMES)]
+    assert levels[:GUESS_CONFIRM_FRAMES - 1] == [None] * (GUESS_CONFIRM_FRAMES - 1)
+    assert levels[-1] == 44
+    assert sorted(p.name for p in learned.iterdir()) == ["4.png"]
+    assert r._read_level_raw(frame, r._regions) == "44"
+    assert r.hint_used is False  # a guess is not the user's settings hint

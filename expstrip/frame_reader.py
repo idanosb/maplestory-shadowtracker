@@ -77,6 +77,30 @@ def hint_fits(raw: str | None, level: int) -> bool:
     return bool(known) and all(a == b for a, b in known)
 
 
+# A level digit with no tile template yet is guessed from the EXP digits (same pixel font, a
+# little smaller), resized to the tile glyph: on the four learned tile digits the right digit
+# scored 0.71-0.79 and led the next by >= 0.08. The guess only seeds the level; the real tile
+# glyphs are then learned from it (as from a user level_hint).
+GUESS_MIN_SCORE = 0.62
+GUESS_MIN_GAP = 0.05
+GUESS_CONFIRM_FRAMES = 3   # the same guessed level on this many consecutive frames
+
+
+def guess_level_digit(glyph: np.ndarray, exp_gs: glyphs.GlyphSet) -> str | None:
+    """The digit whose EXP-font template, resized to `glyph`, matches it best; None if unsure."""
+    h, w = glyph.shape[:2]
+    scores = []
+    for d in "0123456789":
+        imgs = exp_gs.templates.get(d, [])
+        if imgs:
+            scores.append((max(glyphs.score(glyph, cv2.resize(t, (w, h), interpolation=cv2.INTER_LINEAR))
+                               for t in imgs), d))
+    scores.sort(reverse=True)
+    if len(scores) < 2 or scores[0][0] < GUESS_MIN_SCORE or scores[0][0] - scores[1][0] < GUESS_MIN_GAP:
+        return None
+    return scores[0][1]
+
+
 _DIGIT_LOOKALIKES = str.maketrans({"l": "1", "I": "1", "|": "1", "!": "1", "O": "0", "o": "0"})
 
 
@@ -175,6 +199,8 @@ class FrameReader:
         self._learned_dir = Path(learned_dir) if learned_dir is not None else None
         self._level_hint = level_hint
         self.hint_used = False                     # True once level_hint gave the level
+        self._auto_hint = False                    # _level_hint came from guess_level_digit
+        self._guess: tuple[int, int] | None = None  # (guessed level, consecutive frames)
         self._clock = clock
         self._exp_gs = glyphs.GlyphSet.load(templates_dir() / "exp")
         bundled = Path(level_templates) if level_templates is not None else templates_dir() / "level"
@@ -334,11 +360,16 @@ class FrameReader:
             self._drop_frames += 1
         else:
             self._drop_frames = 0
+        if not readable and self._last_level is None and self._level_hint is None and raw:
+            self._guard("guess", self._guess_level, frame, regions, raw)
         level, leveled_up = infer_level(raw, self._last_level, self._drop_frames, self._level_hint)
         if self._last_level is None and level is not None and level == self._level_hint and not readable:
             self._level_hint = None  # the hint is used once
-            self.hint_used = True
-            if hint_fits(raw, level):  # learn the unknown digits from the hinted level
+            auto, self._auto_hint = self._auto_hint, False
+            if not auto:
+                self.hint_used = True
+            if hint_fits(raw, level) or (auto and len(raw) == len(str(level))):
+                # learn the unknown digits from the hinted (or guessed) level
                 self._learn_level, self._learn_cand, self._learn_n = level, None, 0
         if leveled_up:
             self._drop_frames = 0
@@ -350,6 +381,27 @@ class FrameReader:
         if level is not None:
             self._last_level = level
         return level
+
+    def _guess_level(self, frame: np.ndarray, regions: Regions, raw: str) -> None:
+        """No tile template for some digit and no hint: guess the level from the EXP font. A
+        guess that holds for GUESS_CONFIRM_FRAMES frames becomes the level hint."""
+        native = glyphs.to_native(regions.level.crop(frame), regions.scale)
+        imgs = glyphs.glyph_images(native, "level")
+        guess = None
+        if len(imgs) == len(raw) and 1 <= len(imgs) <= 3:
+            digits = [ch if ch.isdigit() else guess_level_digit(img, self._exp_gs)
+                      for img, ch in zip(imgs, raw)]
+            if all(digits) and digits[0] != "0":
+                guess = int("".join(digits))
+        if guess is None:
+            self._guess = None
+            return
+        n = self._guess[1] + 1 if self._guess is not None and self._guess[0] == guess else 1
+        self._guess = (guess, n)
+        if n >= GUESS_CONFIRM_FRAMES:
+            self._guess = None
+            self._level_hint, self._auto_hint = guess, True
+            log.info("level %d guessed from the EXP font (tile read %r)", guess, raw)
 
     def _learn_level_glyphs(self, frame: np.ndarray, regions: Regions, level: int) -> None:
         """Pair the tile glyphs with the digits of an inferred `level`. Only after

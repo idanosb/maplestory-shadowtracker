@@ -43,8 +43,9 @@ differently at different sub-pixel positions. A variant is stored only when it m
 existing variants below 0.97.
 
 - `exp/` (14 px line height): `0`–`9`, `,` `.` `%` `[` `]`, 24 files including variants.
-- `level/`: only `4` (2 variants). The fixture player is level 44; other digits read as `?`
-  until templates for them are added (Task 8 adds level inference for the missing digits).
+- `level/`: `4` (2 variants) from the fixtures; `5` `6` `7` learned at runtime on the author's
+  client (Lv 45-47) and bundled. A digit with no template is guessed from the `exp/` digits resized
+  to the tile glyph (`frame_reader.guess_level_digit`) and then learned into `data/glyphs/level/`.
 
 ## Pickup lines (`pickup/`)
 

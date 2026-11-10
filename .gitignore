@@ -1,0 +1,14 @@
+.venv/
+data/
+settings.json
+build/
+dist/
+.superpowers/
+__pycache__/
+tests/fixtures/visibility.png
+
+recordings/
+
+# game screenshots: kept local, not published
+tests/fixtures/
+docs/reference/

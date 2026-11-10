@@ -29,6 +29,7 @@ OCR_INTERVAL = 3.0          # s between map-title OCR runs; the last result is r
 MINIMAP_INTERVAL = 30.0     # s between minimap re-locates (the window can be dragged)
 RELOCATE_AFTER_FAILS = 5    # consecutive failed EXP parses before a full re-locate
 DEBUG_INTERVAL = 1.0        # s between debug dumps
+DEBUG_UNLOCATED_INTERVAL = 10.0  # s between full-frame dumps while no EXP bar is found
 LEVEL_UP_PCT_DROP = 50.0    # pct drop (points) that marks a level-up when the digits are unreadable
 LEVEL_UP_CONFIRM_FRAMES = 2 # consecutive frames that must show the drop before a level-up is inferred
 GLYPH_CONFIRM_FRAMES = 3    # consecutive frames with agreeing tile glyphs before a glyph is learned
@@ -201,6 +202,7 @@ class FrameReader:
         self._learn_n = 0
         self._warned: set[tuple[str, str]] = set()
         self._debug_t: float | None = None
+        self._debug_full_t: float | None = None
         self._lv_tpl: tuple[float, np.ndarray] | None = None
 
     # -- public ---------------------------------------------------------------------------
@@ -226,6 +228,7 @@ class FrameReader:
             self._ensure_regions(frame, now)
             if self._regions is None:
                 self._fails += 1
+                self._guard("debug", self._debug_unlocated, frame, now)
                 return None, None, None
 
             ep = self._guard("exp", self._read_exp, frame, self._regions)
@@ -441,6 +444,18 @@ class FrameReader:
         with open(self._debug_dir / "readings.log", "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat(timespec='milliseconds')} {line.rstrip()}\n")
 
+    def _debug_unlocated(self, frame: np.ndarray, now: float) -> None:
+        """No EXP bar found: save the whole client frame (rarely), so the cause can be seen."""
+        if self._debug_dir is None:
+            return
+        if self._debug_full_t is not None and now - self._debug_full_t < DEBUG_UNLOCATED_INTERVAL:
+            return
+        self._debug_full_t = now
+        self._debug_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        cv2.imwrite(str(self._debug_dir / f"{stamp}_full_unlocated.png"), frame)
+        self._append_log(f"{stamp} EXP bar not found; frame {frame.shape[1]}x{frame.shape[0]}")
+
     def _debug(self, frame: np.ndarray, now: float, level, ep, m) -> None:
         if self._debug_dir is None:
             return
@@ -454,4 +469,9 @@ class FrameReader:
             if rect is not None:
                 cv2.imwrite(str(self._debug_dir / f"{stamp}_{name}.png"), rect.crop(frame))
         self._append_log(f"{stamp} level={level} exp_pct={ep} map={m.full if m else None} "
-                         f"scale={r.scale:.3f} form={r.minimap_form}")
+                         f"scale={r.scale:.3f} form={r.minimap_form} "
+                         f"frame={frame.shape[1]}x{frame.shape[0]}")
+        if ep is None and (self._debug_full_t is None
+                           or now - self._debug_full_t >= DEBUG_UNLOCATED_INTERVAL):
+            self._debug_full_t = now  # EXP misread: the whole frame shows what the crop missed
+            cv2.imwrite(str(self._debug_dir / f"{stamp}_full.png"), frame)
